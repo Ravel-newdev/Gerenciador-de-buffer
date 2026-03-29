@@ -2,16 +2,17 @@
 #include <stdio.h>
 #include <string.h>
 #include <stdlib.h>
-void evict();
-int clockhand = 0; //poteiro do relógio, usado pelo CLOCK
-//Estado do buffer
-BufferFrame buffer[BUFFER_SIZE]; //5 páginas em memória
-int bufferCount = 0; //Conta as paginas que estão no buffer
-int cacheMiss = 0; //Conta as faltas
-int cacheHit = 0; //Conta os acertos
-Policy policy = LRU; //politica padrão do LRU
+#include <time.h>
 
+/* ponteiro do relógio, usado pela política CLOCK */
+int clockhand = 0;
 
+/* Estado do buffer */
+BufferFrame buffer[BUFFER_SIZE];   /* até 5 páginas em memória */
+int bufferCount = 0;               /* quantidade atual de páginas no buffer */
+int cacheMiss = 0;                 /* contador de cache miss */
+int cacheHit = 0;                  /* contador de cache hit */
+Policy policy = LRU;               /* política padrão */
 
 /* Lê a linha correspondente ao page# no arquivo.
    Retorna 1 se encontrou, 0 se não encontrou. */
@@ -23,110 +24,134 @@ int lerpagina(int key, char *dest) {
     }
 
     char line[MAX_CONTENT];
-    int  lineNum = 0;
+    int lineNum = 0;
 
     while (fgets(line, MAX_CONTENT, file)) {
         lineNum++;
 
-        /* pula o cabeçalho (linha 1) */
-        if (lineNum == 1) continue;
+        /* pula o cabeçalho */
+        if (lineNum == 1) {
+            continue;
+        }
 
-        /* remove \n do final */
+        /* remove o \n do final, se existir */
         line[strcspn(line, "\n")] = '\0';
 
-        /* linha 2 do arquivo = page# 1, linha 3 = page# 2... */
+        /* linha 2 do arquivo = página 1, linha 3 = página 2, etc */
         if (lineNum - 1 == key) {
             strcpy(dest, line);
             fclose(file);
             return 1;
         }
-        
     }
 
     fclose(file);
     return 0;
 }
 
-/* Buscar uma página pelo page#
-   Consulta o buffer, SE não encontrar, procura no arquivo */
-char* fetch(int key){
-    /* declarações todas no topo */
+/* Busca uma página pelo page#
+   Primeiro consulta o buffer
+   Se não encontrar, procura no arquivo */
+char* fetch(int key) {
     int i, j;
     char pagedata[MAX_CONTENT];
     int dirtyflag;
     BufferFrame temp;
 
-    /* Procurar no buffer */
-    for(i = 0; i < bufferCount; i++){
-        if(buffer[i].pageId == key){
+    /* procura no buffer */
+    for (i = 0; i < bufferCount; i++) {
+        if (buffer[i].pageId == key) {
             cacheHit++;
             printf("[HIT] Pagina #%d encontrada no buffer!\n", key);
-            if(policy == LRU){
+
+            /* LRU: move a página acessada para o final,
+               deixando a menos recente no começo */
+            if (policy == LRU) {
                 temp = buffer[i];
-                for(j = i; j < bufferCount - 1; j++){
+                for (j = i; j < bufferCount - 1; j++) {
                     buffer[j] = buffer[j + 1];
                 }
                 buffer[bufferCount - 1] = temp;
                 return buffer[bufferCount - 1].data;
             }
-            if(policy == CLOCK){
+
+            /* CLOCK: página acessada ganha bit de referência 1 */
+            if (policy == CLOCK) {
                 buffer[i].refbit = 1;
             }
+
             return buffer[i].data;
         }
     }
 
-    /* Cache miss */
+    /* se não encontrou no buffer, é miss */
     cacheMiss++;
     printf("[MISS] Pagina #%d nao esta no buffer!\n", key);
 
-    if(bufferCount == BUFFER_SIZE){
+    /* se o buffer estiver cheio, remove uma página */
+    if (bufferCount == BUFFER_SIZE) {
         evict();
     }
 
-    if(!lerpagina(key, pagedata)){
+    /* tenta ler a página do arquivo */
+    if (!lerpagina(key, pagedata)) {
         printf("[ERRO] Pagina #%d nao encontrada no arquivo.\n", key);
         return NULL;
     }
 
+    /* sorteia o valor dirty: 0 ou 1 */
     dirtyflag = rand() % 2;
+
+    /* coloca a nova página no final do buffer */
     buffer[bufferCount].pageId = key;
     strcpy(buffer[bufferCount].data, pagedata);
     buffer[bufferCount].dirty = dirtyflag;
+
+    /* no CLOCK, página recém-carregada entra com bit de referência 1 */
+    if (policy == CLOCK) {
+        buffer[bufferCount].refbit = 1;
+    } else {
+        buffer[bufferCount].refbit = 0;
+    }
+
     bufferCount++;
 
-    printf("[INFO] Pagina #%d carregada! | dirty=%s\n", key, dirtyflag ? "TRUE" : "FALSE");
+    printf("[INFO] Pagina #%d carregada! | dirty=%s\n",
+           key, dirtyflag ? "TRUE" : "FALSE");
+
     return buffer[bufferCount - 1].data;
 }
 
-
-// Remove uma página do buffer. Exibe a página removida e "W" se dirty == TRUE.
+/* remove uma página do buffer
+   Exibe a página removida e "W" se dirty == TRUE. */
 void evict() {
-    int victim = 0; // índice da página a ser removida 
+    int victim = 0;
     int i;
-    // Escolhe a vítima conforme a política 
-    switch (policy) {
 
+    switch (policy) {
         case FIFO:
-            // remove o mais antigo, que é sempre o índice 0
+            /* FIFO: remove a página mais antiga,
+               que está no início do buffer */
             victim = 0;
             break;
 
         case LRU:
-            /* o menos recente fica no índice 0
-               (fetch move o acessado para o final) */
+            /* LRU: a menos recentemente usada fica no início,
+               porque a acessada vai para o final */
             victim = 0;
             break;
 
         case MRU:
-            // o mais recente fica no final 
+            /* MRU: remove a mais recentemente usada,
+               que fica no final */
             victim = bufferCount - 1;
             break;
 
         case CLOCK:
-            // gira o ponteiro até achar refbit == 0 
+            /* CLOCK: percorre circularmente até achar refbit = 0.
+               Se refbit = 1, zera e da segunda chance */
             while (buffer[clockhand].refbit == 1) {
-                buffer[clockhand].refbit = 0; // segunda chance 
+                buffer[clockhand].refbit = 0;
                 clockhand = (clockhand + 1) % bufferCount;
             }
             victim = clockhand;
@@ -134,17 +159,50 @@ void evict() {
             break;
     }
 
-    // Exibe a página que será removida 
     printf("[EVICT] Removendo pagina #%d | %s",
            buffer[victim].pageId, buffer[victim].data);
+
     if (buffer[victim].dirty == 1) {
-        printf("W");
+        printf(" W");
     }
     printf("\n");
 
-    // Remove do buffer, desloca os elementos seguintes 
+    /* desloca os elementos para fechar o espaço removido */
     for (i = victim; i < bufferCount - 1; i++) {
         buffer[i] = buffer[i + 1];
     }
+
     bufferCount--;
+
+    /* evita problemas do ponteiro do CLOCK quando o buffer diminui */
+    if (bufferCount > 0) {
+        clockhand = clockhand % bufferCount;
+    } else {
+        clockhand = 0;
+    }
+}
+
+/* exibindo todas as pags que estao no buffer */
+void displayCache() {
+    int i;
+
+    printf("\n===== BUFFER =====\n");
+
+    if (bufferCount == 0) {
+        printf("Buffer vazio\n");
+        return;
+    }
+
+    for (i = 0; i < bufferCount; i++) {
+        printf("Chave -> %d | Valor -> %s | Atualizacao -> %s\n",
+               buffer[i].pageId,
+               buffer[i].data,
+               buffer[i].dirty ? "TRUE" : "FALSE");
+    }
+}
+
+/* Exibe os caches do buffer */
+void displayStats() {
+    printf("Cache hit: %d\n", cacheHit);
+    printf("Cache miss: %d\n", cacheMiss);
 }
