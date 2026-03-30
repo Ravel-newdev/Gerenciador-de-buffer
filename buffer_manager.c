@@ -8,11 +8,11 @@
 int clockhand = 0;
 
 /* Estado do buffer */
-BufferFrame buffer[BUFFER_SIZE];   /* até 5 páginas em memória */
-int bufferCount = 0;               /* quantidade atual de páginas no buffer */
-int cacheMiss = 0;                 /* contador de cache miss */
-int cacheHit = 0;                  /* contador de cache hit */
-Policy policy = LRU;               /* política padrão */
+BufferFrame buffer[BUFFER_SIZE];
+int bufferCount = 0;
+int cacheMiss = 0;
+int cacheHit = 0;
+Policy policy = LRU;
 
 /* Lê a linha correspondente ao page# no arquivo.
    Retorna 1 se encontrou, 0 se não encontrou. */
@@ -64,9 +64,9 @@ char* fetch(int key) {
             cacheHit++;
             printf("[HIT] Pagina #%d encontrada no buffer!\n", key);
 
-            /* LRU: move a página acessada para o final,
-               deixando a menos recente no começo */
-            if (policy == LRU) {
+            /* LRU e MRU:
+               move a página acessada para o final */
+            if (policy == LRU || policy == MRU) {
                 temp = buffer[i];
                 for (j = i; j < bufferCount - 1; j++) {
                     buffer[j] = buffer[j + 1];
@@ -107,12 +107,9 @@ char* fetch(int key) {
     strcpy(buffer[bufferCount].data, pagedata);
     buffer[bufferCount].dirty = dirtyflag;
 
-    /* no CLOCK, página recém-carregada entra com bit de referência 1 */
-    if (policy == CLOCK) {
-        buffer[bufferCount].refbit = 1;
-    } else {
-        buffer[bufferCount].refbit = 0;
-    }
+    /* no CLOCK, a página nova entra com refbit 0.
+       Só ganha 1 quando for acessada novamente. */
+    buffer[bufferCount].refbit = 0;
 
     bufferCount++;
 
@@ -130,26 +127,18 @@ void evict() {
 
     switch (policy) {
         case FIFO:
-            /* FIFO: remove a página mais antiga,
-               que está no início do buffer */
             victim = 0;
             break;
 
         case LRU:
-            /* LRU: a menos recentemente usada fica no início,
-               porque a acessada vai para o final */
             victim = 0;
             break;
 
         case MRU:
-            /* MRU: remove a mais recentemente usada,
-               que fica no final */
             victim = bufferCount - 1;
             break;
 
         case CLOCK:
-            /* CLOCK: percorre circularmente até achar refbit = 0.
-               Se refbit = 1, zera e da segunda chance */
             while (buffer[clockhand].refbit == 1) {
                 buffer[clockhand].refbit = 0;
                 clockhand = (clockhand + 1) % bufferCount;
@@ -174,7 +163,6 @@ void evict() {
 
     bufferCount--;
 
-    /* evita problemas do ponteiro do CLOCK quando o buffer diminui */
     if (bufferCount > 0) {
         clockhand = clockhand % bufferCount;
     } else {
